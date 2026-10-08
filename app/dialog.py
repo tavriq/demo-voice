@@ -2,10 +2,12 @@
 
 The model only reads speech: it returns the card fields, a short spoken acknowledgement of what
 was new in this utterance and a flag for questions it must not answer (price, terms). Code leads
-the conversation: it asks about the first empty field from a fixed set of questions, takes the
-contact from the masking labels (the model only sees that one was given), keeps earlier values
-the model dropped, and ends the conversation when problem, city and time are known and budget and
-contact were filled or asked in an earlier turn, or after ``max_turns``.
+the conversation: it asks about the empty fields from a fixed set of questions (city and time
+together, budget and contact together), takes the contact from the masking labels (the model only
+sees that one was given) and keeps earlier values the model dropped. The conversation ends when
+problem, city and time are known, the budget was filled or asked once and the contact was filled
+or asked twice (the second time the operator explains that a web page does not see the caller's
+number), or after ``max_turns``. Questions count as asked only from earlier turns.
 
 Probe 08.10 (evals/probe-models-2026-10-08.jsonl): every fast model filled the card right, most
 of them asked the wrong next question (often skipping the contact). Hence the split.
@@ -25,6 +27,9 @@ from app.pricing import LLM_MAX_TOKENS, MAX_REPLY_CHARS
 TEXT_FIELDS = ("problem", "city", "when")
 ORDER = ("problem", "city", "when", "budget", "contact")
 OPTIONAL = ("budget", "contact")
+# what each question counts as asked, for is_done and next_question
+ASKED_BY = {"budget": ("budget",), "contact": ("contact",), "budget_contact": ("budget", "contact"),
+            "contact_again": ("contact_again",)}
 CONTACT_KINDS = ("phone", "email", "handle", "link")
 FIELD_LIMITS = {"problem": 120, "city": 60, "when": 60}
 MAX_BUDGET = 100_000_000
@@ -42,8 +47,11 @@ PHRASES = {
     "problem": "Расскажите, что случилось?",
     "city": "В каком вы городе?",
     "when": "Когда это нужно?",
+    "city_when": "В каком вы городе и когда это нужно?",
     "budget": "Какой бюджет закладываете?",
-    "contact": "Как с вами связаться?",
+    "contact": "Оставьте телефон или почту для связи — можно выдуманные.",
+    "budget_contact": "Какой бюджет закладываете? И оставьте телефон или почту — можно выдуманные.",
+    "contact_again": "Ваш номер мне не виден: это сайт, а не звонок. Назовите телефон или почту — можно выдуманные.",
     "ack": "Принято.",
     "contact_ok": "Принято: контакт записан.",
     "off_topic": OFF_TOPIC,
@@ -112,15 +120,16 @@ class State:
     history: list[str] = field(default_factory=list)
     turns: int = 0
     done: bool = False
+    empties: int = 0  # recordings without speech: not turns, but capped (app.main)
 
     def to_json(self) -> dict:
         return {"card": self.card, "asked": self.asked, "history": self.history, "turns": self.turns,
-                "done": self.done}
+                "done": self.done, "empties": self.empties}
 
     @classmethod
     def from_json(cls, data: dict) -> "State":
         return cls(dict(data["card"]), list(data["asked"]), list(data["history"]), int(data["turns"]),
-                   bool(data["done"]))
+                   bool(data["done"]), int(data.get("empties", 0)))
 
 
 @dataclass
@@ -148,17 +157,36 @@ def missing(card: dict) -> list[str]:
 
 
 def is_done(state: State, max_turns: int) -> bool:
+    """Problem, city and time known; budget filled or asked once; contact filled or asked twice
+    (the second time the page explains that it does not see the caller's number)."""
     if state.turns >= max_turns:
         return True
     if not all(_filled(state.card, f) for f in TEXT_FIELDS):
         return False
-    return all(_filled(state.card, f) or f in state.asked for f in OPTIONAL)
+    return (_filled(state.card, "budget") or "budget" in state.asked) and \
+        (_filled(state.card, "contact") or "contact_again" in state.asked)
 
 
 def next_question(state: State) -> str:
-    for f in ORDER:
-        if not _filled(state.card, f) and not (f in OPTIONAL and f in state.asked):
+    """The question for the empty fields, two at a time where they go together."""
+    c = state.card
+    if not _filled(c, "problem"):
+        return "problem"
+    if not _filled(c, "city") and not _filled(c, "when"):
+        return "city_when"
+    for f in ("city", "when"):
+        if not _filled(c, f):
             return f
+    budget = not _filled(c, "budget") and "budget" not in state.asked
+    contact = not _filled(c, "contact") and "contact" not in state.asked
+    if budget and contact:
+        return "budget_contact"
+    if budget:
+        return "budget"
+    if contact:
+        return "contact"
+    if not _filled(c, "contact") and "contact_again" not in state.asked:
+        return "contact_again"
     return "none"
 
 
@@ -254,8 +282,7 @@ def run_turn(client: ChatClient, model: str, state: State, transcript: str, max_
     # "asked" counts only questions from earlier turns: the client must get a chance to answer
     state.done = is_done(state, max_turns)
     asks = "closing" if state.done else next_question(state)
-    if asks in OPTIONAL:
-        state.asked.append(asks)
+    state.asked += [q for q in ASKED_BY.get(asks, ()) if q not in state.asked]
     if asks in PHRASES:
         parts.append((PHRASES[asks], asks))
     reply = " ".join(text for text, _ in parts)[:MAX_REPLY_CHARS * 2]

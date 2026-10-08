@@ -1,6 +1,9 @@
 """OpenAI-compatible gateway (Timeweb AI Gateway): chat with a JSON schema, speech to text,
 text to speech. Stdlib only.
 
+Recognition gets no prompt: on an empty or cut recording gpt-4o-transcribe returned the prompt
+itself as the transcript (08.10, «Звонок в сервисную компанию»).
+
 No retries after a timeout: it could be billed twice. 429 is not billed: wait once and repeat
 (the key is shared with other demos). Errors never carry the key or the URL.
 """
@@ -16,7 +19,6 @@ from dataclasses import dataclass
 
 from app.pricing import STT_PROMPT_TOKENS, call_cost_rub, tts_cost_rub
 
-STT_PROMPT = "Звонок в сервисную компанию: ремонт, аренда, монтаж оборудования, консультация."
 TTS_INSTRUCTIONS = "Говори дружелюбно и спокойно, как оператор сервисной службы. Обычный темп."
 
 # The page records webm/opus (Chrome, Firefox, Android) or mp4/aac (Safari, iPhone).
@@ -105,8 +107,7 @@ class Gateway:
         ext = AUDIO_TYPES.get(content_type.split(";")[0].strip().lower(), "webm")
         boundary = uuid.uuid4().hex
         parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
-                 for k, v in (("model", model), ("language", "ru"), ("response_format", "json"),
-                              ("prompt", STT_PROMPT))]
+                 for k, v in (("model", model), ("language", "ru"), ("response_format", "json"))]
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="turn.{ext}"\r\n'
                      f'Content-Type: {content_type}\r\n\r\n'.encode())
         parts += [audio, f"\r\n--{boundary}--\r\n".encode()]

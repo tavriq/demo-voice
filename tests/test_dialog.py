@@ -19,19 +19,30 @@ def test_first_turn_fills_card_and_code_asks_next():
                         "Принято: кондиционер в Казани, до пятницы."))
     assert r.card["city"] == "Казань" and r.card["when"] == "до пятницы" and r.card["contact"] is None
     assert r.parts == [("Принято.", "ack"), ("Кондиционер в Казани, до пятницы.", None),
-                       (PHRASES["budget"], "budget")]
-    assert r.reply == "Принято. Кондиционер в Казани, до пятницы. Какой бюджет закладываете?"
-    assert r.asks == "budget" and state.asked == ["budget"] and not r.done
+                       (PHRASES["budget_contact"], "budget_contact")]
+    assert r.reply.startswith("Принято. Кондиционер в Казани, до пятницы. Какой бюджет закладываете?")
+    assert r.asks == "budget_contact" and state.asked == ["budget", "contact"] and not r.done
     assert "<реплика>" in gw.chats[0]["messages"][1]["content"]
 
 
-def test_code_asks_contact_even_if_model_would_skip_it():
+def test_contact_asked_twice_then_done():
     state = State(asked=["budget"])
     state.card.update(problem="течёт кран", city="Казань", when="завтра")
     r, _ = turn(state, "Бюджет пока не знаю", update("течёт кран", "Казань", "завтра"))
     assert r.asks == "contact" and r.parts[0] == (NOT_HEARD, "not_heard") and not r.done
-    r, _ = turn(state, "Звонить не надо", update("течёт кран", "Казань", "завтра"))
+    # «по этому телефону»: the page does not see the number, the operator says so once
+    r, _ = turn(state, "По этому телефону", update("течёт кран", "Казань", "завтра"))
+    assert r.asks == "contact_again" and not r.done
+    r, _ = turn(state, "Не надо звонить", update("течёт кран", "Казань", "завтра"))
     assert r.done and r.asks == "closing" and r.reply.endswith(PHRASES["closing"])
+
+
+def test_city_and_when_asked_together_then_one_left():
+    state = State()
+    r, _ = turn(state, "Сломался насос", update("сломался насос", ack="Принято: сломался насос."))
+    assert r.asks == "city_when"
+    r, _ = turn(state, "Самара", update("сломался насос", "Самара", ack="Принято: Самара."))
+    assert r.asks == "when"
 
 
 def test_contact_is_set_by_code_and_hidden_from_model():
@@ -73,7 +84,7 @@ def test_ack_without_changes_is_dropped():
     state = State()
     state.card["problem"] = "течёт кран"
     r, _ = turn(state, "ммм", update("течёт кран", ack="Принято: течёт кран."))
-    assert r.parts[0] == (NOT_HEARD, "not_heard") and r.asks == "city"
+    assert r.parts[0] == (NOT_HEARD, "not_heard") and r.asks == "city_when"
 
 
 def test_done_after_max_turns():
@@ -86,7 +97,7 @@ def test_broken_model_answer_falls_back_to_next_question():
     state = State()
     state.card["problem"] = "течёт кран"
     r, _ = turn(state, "ммм", "это не json")
-    assert not r.model_ok and r.parts[0] == (NOT_HEARD, "not_heard") and r.asks == "city"
+    assert not r.model_ok and r.parts[0] == (NOT_HEARD, "not_heard") and r.asks == "city_when"
 
 
 def test_empty_utterance_skips_the_model():
@@ -108,14 +119,22 @@ def test_budget_checked(budget, expected):
     assert parse_update(update(budget_rub=budget))["budget_rub"] == expected
 
 
-def test_next_question_skips_asked_optional():
+def test_next_question_order():
     state = State()
-    state.card.update(problem="p", city="c", when="w")
-    assert next_question(state) == "budget"
+    assert next_question(state) == "problem"
+    state.card.update(problem="p")
+    assert next_question(state) == "city_when"
+    state.card.update(city="c", when="w")
+    assert next_question(state) == "budget_contact"
     state.asked = ["budget"]
     assert next_question(state) == "contact"
     state.asked = ["budget", "contact"]
+    assert next_question(state) == "contact_again" and not is_done(state, 6)
+    state.asked.append("contact_again")
     assert next_question(state) == "none" and is_done(state, 6)
+    state.card["contact"] = "[телефон скрыт]"
+    state.asked = ["contact"]
+    assert next_question(state) == "budget" and not is_done(state, 6)
 
 
 @pytest.mark.parametrize("ack, parts", [

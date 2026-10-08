@@ -67,6 +67,7 @@ def test_audio_and_contacts_never_stored(settings):
 
 def test_text_turn_and_submit(settings, monkeypatch):
     client, gw = make(settings, [update("течёт кран", "Казань", "завтра", 5000, "Принято: кран, Казань."),
+                                 update("течёт кран", "Казань", "завтра", 5000),
                                  update("течёт кран", "Казань", "завтра", 5000)])
     sent = {}
 
@@ -79,6 +80,8 @@ def test_text_turn_and_submit(settings, monkeypatch):
     conv = start(client)
     r1 = client.post(f"/api/voice/conversations/{conv}/turn", json={"text": "Течёт кран, Казань, завтра, 5 тысяч"})
     assert r1.json()["done"] is False and r1.json()["asks"] == "contact"
+    r2 = client.post(f"/api/voice/conversations/{conv}/turn", json={"text": "По этому телефону"})
+    assert r2.json()["asks"] == "contact_again"
     r2 = client.post(f"/api/voice/conversations/{conv}/turn", json={"text": "Не надо связываться"})
     assert r2.json()["done"] is True and r2.json()["asks"] == "closing" and gw.heard == []
     assert r2.json()["sentences"][-1]["audio"] == "/api/voice/phrase/closing"
@@ -90,6 +93,24 @@ def test_text_turn_and_submit(settings, monkeypatch):
     monkeypatch.setattr(n8n, "send", lambda *a, **k: pytest.fail("called twice"))
     assert client.post(f"/api/voice/conversations/{conv}/submit").json()["triage"]["category"] == "repair"
     assert client.post(f"/api/voice/conversations/{conv}/turn", json={"text": "ещё"}).status_code == 409
+
+
+@pytest.mark.parametrize("transcript", [("", 40), ("Звонок в сервисную компанию", 3)])
+def test_recording_without_speech_is_not_a_turn(settings, transcript):
+    client, gw = make(settings, [], [transcript])
+    conv = start(client)
+    r = say(client, conv)
+    assert r.status_code == 200 and r.json()["empty"] is True and r.json()["turns_left"] == 6
+    assert r.json()["sentences"][0]["audio"] == "/api/voice/phrase/not_heard" and gw.chats == []
+
+
+def test_too_many_empty_recordings_end_the_conversation(settings):
+    client, _ = make(settings, [], [("", 0)] * 7)
+    conv = start(client)
+    for _ in range(6):
+        assert say(client, conv).json()["done"] is False
+    assert say(client, conv).json()["done"] is True
+    assert say(client, conv).status_code == 409
 
 
 def test_submit_needs_problem(settings):

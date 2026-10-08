@@ -31,11 +31,13 @@ class FakeGateway:
         return Chat(reply, 400, 60, 15, 0.1)
 
     def transcribe(self, model, audio, content_type):
+        """A transcript is a string (57 audio tokens, ~5.7 s) or a (text, audio_tokens) pair."""
         self.heard.append((audio, content_type))
         text = self.transcripts.pop(0)
         if isinstance(text, Exception):
             raise text
-        return Transcript(text, 57, 20, 0.09)
+        text, tokens = text if isinstance(text, tuple) else (text, 57)
+        return Transcript(text, tokens, 20, 0.09)
 
     def speak(self, model, voice, text):
         self.spoken.append(text)

@@ -33,6 +33,9 @@ log = logging.getLogger("demo_voice")
 TEXT_LIMIT = 300
 SPEECH_TTL_S = 120
 MAX_AUDIO_S = 20
+# Recognition reports 10 audio tokens per second: under ~0.8 s there is no utterance to take.
+MIN_AUDIO_TOKENS = 8
+MAX_EMPTIES = 6
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
@@ -155,6 +158,20 @@ def create_app(settings: Settings | None = None, client: ChatClient | None = Non
     def synthesize(text: str):
         return client.speak(settings.tts_model, settings.tts_voice, text)
 
+    def empty_turn(conv_id: str, state: State, reservation_id: int, cost: float, stt_ms: int) -> dict:
+        """No speech in the recording: ask again without using up a turn (at most MAX_EMPTIES times)."""
+        store.settle(reservation_id, cost)
+        state.empties += 1
+        if state.empties > MAX_EMPTIES:
+            state.done = True
+        store.save(conv_id, state.to_json(), cost)
+        return {"turn": state.turns, "turns_left": settings.max_turns - state.turns, "heard": "", "empty": True,
+                "card": state.card, "missing": missing(state.card), "asks": "none",
+                "reply": PHRASES["not_heard"], "done": state.done,
+                "sentences": [{"text": PHRASES["not_heard"], "audio": "/api/voice/phrase/not_heard", "live": False}],
+                "model_ok": True, "model_error": None, "timings_ms": {"stt": stt_ms, "llm": None, "server": None},
+                "cost_rub": round(cost, 4)}
+
     def do_turn(conv_id: str, audio: bytes | None, content_type: str, text: str | None) -> JSONResponse | dict:
         started = time.perf_counter()
         with locks.get(conv_id):
@@ -173,6 +190,8 @@ def create_app(settings: Settings | None = None, client: ChatClient | None = Non
                 if audio is not None:
                     heard = client.transcribe(settings.stt_model, audio, content_type)
                     stt_ms, cost, text = heard.ms, heard.cost_rub, heard.text
+                    if not heard.text or heard.audio_tokens < MIN_AUDIO_TOKENS:
+                        return empty_turn(conv_id, state, decision.reservation_id, cost, stt_ms)
                 result = run_turn(client, settings.model, state, text or "", settings.max_turns)
             except GatewayError as e:
                 # The step may have been billed: keep the worst case. The turn is used up.
