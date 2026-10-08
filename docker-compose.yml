@@ -1,0 +1,55 @@
+name: demo-voice
+
+services:
+  app:
+    build: .
+    image: demo-voice:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18104:8000"
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    # Root filesystem is read-only; state lives in the volume, scratch space in /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    env_file:
+      # LLM_API_KEY, LLM_BASE_URL: the server's shared gateway file, never printed.
+      - path: ../llm.env
+        required: false
+    environment:
+      VOICE_MODEL: "gemini/gemini-3.1-flash-lite"
+      STT_MODEL: "openai/gpt-4o-transcribe"
+      TTS_MODEL: "openai/gpt-4o-mini-tts"
+      TTS_VOICE: "alloy"
+      # the n8n triage demo (demo-n8n) in its own docker network, see networks below
+      N8N_TRIAGE_URL: "http://n8n:5678/webhook/triage"
+      DAILY_BUDGET_RUB: "15"
+      CONVERSATIONS_PER_HOUR: "5"
+      MAX_TURNS: "6"
+      RETENTION_DAYS: "30"
+      # nginx on the host reaches the container through the docker bridge.
+      TRUSTED_PROXY: "172.16.0.0/12"
+    volumes:
+      - demo-voice-var:/var/lib/demo-voice
+    networks:
+      - default
+      - n8n
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  n8n:
+    external: true
+    name: demo-n8n_default
+
+volumes:
+  demo-voice-var:
