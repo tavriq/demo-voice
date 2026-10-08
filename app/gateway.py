@@ -1,8 +1,9 @@
 """OpenAI-compatible gateway (Timeweb AI Gateway): chat with a JSON schema, speech to text,
 text to speech. Stdlib only.
 
-Recognition gets no prompt: on an empty or cut recording gpt-4o-transcribe returned the prompt
-itself as the transcript (08.10, «Звонок в сервисную компанию»).
+Recognition gets a short Russian prompt: without it noise came back in other languages
+(«Hej.», «ありがとう。», 08.10). On an empty or cut recording the model may return the prompt itself
+as the transcript; app.main drops such transcripts (is_noise).
 
 No retries after a timeout: it could be billed twice. 429 is not billed: wait once and repeat
 (the key is shared with other demos). Errors never carry the key or the URL.
@@ -11,6 +12,7 @@ No retries after a timeout: it could be billed twice. 429 is not billed: wait on
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -20,6 +22,8 @@ from dataclasses import dataclass
 from app.pricing import STT_PROMPT_TOKENS, call_cost_rub, tts_cost_rub
 
 TTS_INSTRUCTIONS = "Говори дружелюбно и спокойно, как оператор сервисной службы. Обычный темп."
+
+STT_PROMPT = "Клиент по-русски описывает заявку."
 
 # The page records webm/opus (Chrome, Firefox, Android) or mp4/aac (Safari, iPhone).
 AUDIO_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "mp4", "audio/mpeg": "mp3",
@@ -33,6 +37,22 @@ class GatewayError(Exception):
     def __init__(self, detail: str):
         super().__init__(detail)
         self.detail = detail
+
+
+_NORM = re.compile(r"[^0-9a-zа-яё]+")
+_CYR_OR_DIGIT = re.compile(r"[а-яёА-ЯЁ0-9]")
+# What recognition invents on noise and silence (seen 08.10 and the usual ones in Russian).
+_INVENTED = re.compile(r"продолжение следует|субтитр|спасибо за просмотр|подписывайтесь|звонок в сервисную",
+                       re.IGNORECASE)
+
+
+def is_noise(text: str) -> bool:
+    """A transcript that is not the client's speech: no Cyrillic and no digits, the prompt echoed
+    back, or a phrase recognition invents on silence."""
+    if not _CYR_OR_DIGIT.search(text) or _INVENTED.search(text):
+        return True
+    norm, prompt = _NORM.sub(" ", text.lower()).strip(), _NORM.sub(" ", STT_PROMPT.lower()).strip()
+    return bool(norm) and norm in prompt
 
 
 @dataclass
@@ -107,7 +127,8 @@ class Gateway:
         ext = AUDIO_TYPES.get(content_type.split(";")[0].strip().lower(), "webm")
         boundary = uuid.uuid4().hex
         parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
-                 for k, v in (("model", model), ("language", "ru"), ("response_format", "json"))]
+                 for k, v in (("model", model), ("language", "ru"), ("response_format", "json"),
+                              ("prompt", STT_PROMPT))]
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="turn.{ext}"\r\n'
                      f'Content-Type: {content_type}\r\n\r\n'.encode())
         parts += [audio, f"\r\n--{boundary}--\r\n".encode()]

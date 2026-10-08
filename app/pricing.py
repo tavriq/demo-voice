@@ -31,7 +31,7 @@ FALLBACK = max(PRICES_RUB_PER_1M.values(), key=lambda p: p[0] + p[1])
 # Recognition: 10 audio tokens per second (probe 08.10); text out ~4 per second, 8 assumed.
 STT_AUDIO_TOKENS_PER_S = 10
 STT_TEXT_TOKENS_PER_S = 8
-STT_PROMPT_TOKENS = 20  # the request without a prompt still carries ~18 text tokens
+STT_PROMPT_TOKENS = 30  # ~18 text tokens of the request and the short prompt
 # The lowest bitrate the page records with: the worst duration of an upload of N bytes.
 MIN_AUDIO_BITRATE = 32_000
 # Synthesis: ~14 characters per second of speech (probe 08.10) and, as OpenAI estimates for

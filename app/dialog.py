@@ -121,15 +121,16 @@ class State:
     turns: int = 0
     done: bool = False
     empties: int = 0  # recordings without speech: not turns, but capped (app.main)
+    replies: list[str] = field(default_factory=list)  # what the operator said, for the error analysis
 
     def to_json(self) -> dict:
         return {"card": self.card, "asked": self.asked, "history": self.history, "turns": self.turns,
-                "done": self.done, "empties": self.empties}
+                "done": self.done, "empties": self.empties, "replies": self.replies}
 
     @classmethod
     def from_json(cls, data: dict) -> "State":
         return cls(dict(data["card"]), list(data["asked"]), list(data["history"]), int(data["turns"]),
-                   bool(data["done"]), int(data.get("empties", 0)))
+                   bool(data["done"]), int(data.get("empties", 0)), list(data.get("replies", [])))
 
 
 @dataclass
@@ -286,6 +287,7 @@ def run_turn(client: ChatClient, model: str, state: State, transcript: str, max_
     if asks in PHRASES:
         parts.append((PHRASES[asks], asks))
     reply = " ".join(text for text, _ in parts)[:MAX_REPLY_CHARS * 2]
+    state.replies.append(reply)
     return TurnResult(utterance, dict(state.card), parts, asks, reply, state.done, model_ok, error,
                       chat.ms if chat else None, chat.cost_rub if chat else 0.0)
 

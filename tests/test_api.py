@@ -95,7 +95,9 @@ def test_text_turn_and_submit(settings, monkeypatch):
     assert client.post(f"/api/voice/conversations/{conv}/turn", json={"text": "ещё"}).status_code == 409
 
 
-@pytest.mark.parametrize("transcript", [("", 40), ("Звонок в сервисную компанию", 3)])
+@pytest.mark.parametrize("transcript", [("", 40), ("Звонок в сервисную компанию", 3), ("Hej.", 20),
+                                        ("ありがとう。", 15), ("Клиент по-русски", 25),
+                                        ("Продолжение следует...", 30)])
 def test_recording_without_speech_is_not_a_turn(settings, transcript):
     client, gw = make(settings, [], [transcript])
     conv = start(client)

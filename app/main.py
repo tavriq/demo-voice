@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from app import n8n
 from app.config import Settings
 from app.dialog import PHRASES, ChatClient, State, missing, run_turn, triage_text
-from app.gateway import AUDIO_TYPES, Gateway, GatewayError
+from app.gateway import AUDIO_TYPES, Gateway, GatewayError, is_noise
 from app.netutil import client_ip, rate_limit_key
 from app.pricing import N8N_RESERVE_RUB, tts_cost_rub, turn_worst_rub
 from app.store import Store
@@ -190,7 +190,7 @@ def create_app(settings: Settings | None = None, client: ChatClient | None = Non
                 if audio is not None:
                     heard = client.transcribe(settings.stt_model, audio, content_type)
                     stt_ms, cost, text = heard.ms, heard.cost_rub, heard.text
-                    if not heard.text or heard.audio_tokens < MIN_AUDIO_TOKENS:
+                    if not heard.text or heard.audio_tokens < MIN_AUDIO_TOKENS or is_noise(heard.text):
                         return empty_turn(conv_id, state, decision.reservation_id, cost, stt_ms)
                 result = run_turn(client, settings.model, state, text or "", settings.max_turns)
             except GatewayError as e:

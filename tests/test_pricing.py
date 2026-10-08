@@ -17,3 +17,4 @@ def test_worst_turn_bounds():
 
 def test_unknown_model_priced_as_the_most_expensive():
     assert call_cost_rub("someone/new-model", 1000, 1000) >= call_cost_rub("openai/gpt-5.6-terra", 1000, 1000)
+
